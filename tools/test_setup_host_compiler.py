@@ -126,30 +126,52 @@ class InstallHint(unittest.TestCase):
     """The command names this distro's package manager; setup prints it and never runs it."""
 
     def hint_with(self, resolved):
-        """install_hint(14) when which() resolves exactly the names in `resolved`."""
+        """install_hint(14) when which() resolves exactly the names in `resolved` -> (command, has_escape)."""
         with mock.patch.object(setup.shutil, "which", lambda name: f"/usr/bin/{name}" if name in resolved else None):
             return setup.install_hint(14)
 
     def test_pacman(self):
-        self.assertIn("sudo pacman -S gcc14 gcc14-libs", self.hint_with({"pacman"}))
+        hint, has_escape = self.hint_with({"pacman"})
+        self.assertIn("sudo pacman -S gcc14 gcc14-libs", hint)
+        self.assertFalse(has_escape)
 
     def test_apt(self):
-        self.assertEqual(self.hint_with({"apt"}), "sudo apt install gcc-14 g++-14")
+        hint, has_escape = self.hint_with({"apt"})
+        self.assertEqual(hint, "sudo apt install gcc-14 g++-14")
+        self.assertFalse(has_escape)
 
     def test_dnf(self):
-        self.assertEqual(self.hint_with({"dnf"}), "sudo dnf install gcc14 gcc14-c++")
+        hint, has_escape = self.hint_with({"dnf"})
+        self.assertEqual(hint, "sudo dnf install gcc14 gcc14-c++")
+        self.assertFalse(has_escape)
 
     def test_zypper(self):
-        self.assertEqual(self.hint_with({"zypper"}), "sudo zypper install gcc14 gcc14-c++")
+        hint, has_escape = self.hint_with({"zypper"})
+        self.assertEqual(hint, "sudo zypper install gcc14 gcc14-c++")
+        self.assertFalse(has_escape)
 
     def test_pacman_wins_the_order(self):
-        self.assertIn("pacman", self.hint_with({"pacman", "apt"}))
+        hint, _ = self.hint_with({"pacman", "apt"})
+        self.assertIn("pacman", hint)
 
     def test_nothing_recognised_falls_back_generically(self):
-        hint = self.hint_with({})
+        hint, has_escape = self.hint_with({})
         self.assertIn("install gcc-14 and g++-14 with your package manager", hint)
         self.assertIn("CC, CXX and CUDAHOSTCXX", hint)      # the way out is in the fallback itself
         self.assertNotIn("sudo", hint)
+        self.assertTrue(has_escape)                         # the caller must not repeat the escape hatch
+
+    def test_the_commands_are_shell_safe(self):
+        """The whole point is a command the user pastes into a shell: nothing in it may be a metacharacter
+        (the "(" of an appended parenthetical note broke exactly that).  + . are safe word characters: apt's
+        package name is g++-14."""
+        for pm in ("pacman", "apt", "dnf", "zypper"):
+            hint, _ = self.hint_with({pm})
+            self.assertRegex(hint, r"^[A-Za-z0-9 +_.-]+$", f"{pm}: {hint!r}")
+
+    def test_windows_returns_no_hint(self):
+        with mock.patch.object(setup, "WIN", True):
+            self.assertEqual(setup.install_hint(14), ("", True))
 
     def test_the_warning_carries_the_command(self):
         """g++ 16 on the box, nvcc stops at 14, no gcc-N installed: warn() must embed this distro's line."""
